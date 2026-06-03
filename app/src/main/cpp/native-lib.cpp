@@ -5,7 +5,7 @@
 #include <cstring>
 #include <jni.h>
 
-#define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO, "VulkanApp", __VA_ARGS__))
+#define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO, "VulkanApp", __VA_ARGS__)) // Helper Log
 
 // Globais
 VkInstance instance;             // Conexão com o Vulkan
@@ -94,6 +94,8 @@ void createSwapChain(struct android_app *app) {
     swapchainInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 
     // V-Sync -> Modo FIFO garante que a troca de imagens espere a tela piscar.
+    // Assim economizar bateria
+    // obriga a sua GPU a entrar em "modo de espera" se ela desenhar os quadros mais rápido do que a tela do celular consegue exibir
     swapchainInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
 
     // Ignora o desenho de pixels que estejam escondidos atrás de menus do sistema
