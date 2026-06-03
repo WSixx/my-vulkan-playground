@@ -20,6 +20,7 @@ project("myvulkanplayground")
 # the target library name; in the sub-module's CMakeLists.txt, ${PROJECT_NAME}
 # is preferred for the same purpose.
 #
+find_package(game-activity REQUIRED CONFIG)
 # In order to load a library into your app from Java/Kotlin, you must call
 # System.loadLibrary() and pass the name of the library defined here;
 # for GameActivity/NativeActivity derived applications, the same library name must be
@@ -35,4 +36,5 @@ target_link_libraries(${CMAKE_PROJECT_NAME}
         # List libraries link to the target library
         vulkan  # A API do Vulkan
         android
+        game-activity::game-activity_static
         log)

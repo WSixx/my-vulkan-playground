@@ -41,11 +41,15 @@ android {
         }
     }
     buildFeatures {
+        prefab = true
         viewBinding = true
     }
 }
 
 dependencies {
+
+    implementation(libs.androidx.games.activity)
+
     implementation(libs.androidx.appcompat)
     implementation(libs.androidx.constraintlayout)
     implementation(libs.androidx.core.ktx)
