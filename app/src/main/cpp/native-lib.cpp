@@ -4,6 +4,7 @@
 #include <android/log.h>             //  Logcat
 #include <cstring>
 #include <jni.h>
+#include <vector>
 
 #define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO, "VulkanApp", __VA_ARGS__)) // Helper Log
 
@@ -13,6 +14,11 @@ VkPhysicalDevice physicalDevice; // A placa de vídeo física do celular
 VkDevice logicalDevice;          // Sessão de uso (Device Lógico)
 VkSwapchainKHR swapchain;        // A Fila de telas
 VkSurfaceKHR surface;
+VkRenderPass renderPass;
+VkFormat swapchainImageFormat; // formato da nossa tela
+
+std::vector<VkImage> swapchainImages; // imagens brutas
+std::vector<VkImageView> swapchainImagesViews;
 
 void createLogicalDevice() {
     VkDeviceQueueCreateInfo queueInfo{}; // {} <- iniciar sem sujeira
@@ -109,6 +115,101 @@ void createSwapChain(struct android_app *app) {
         LOGI("Falha ao criar a Swapchain!");
     } else {
         LOGI("Swapchain criada com sucesso! Resolução: %d x %d", width, height);
+    }
+
+}
+
+void createImageViews() {
+    // 1 RESGATANDO AS IMAGENS BRUTAS DA SWAPCHAIN
+    uint32_t imageCount;
+
+    // Chamada 1: ultimo parâmetro vazio (nullptr) só para descobrir o 'imageCount'
+    vkGetSwapchainImagesKHR(logicalDevice, swapchain, &imageCount, nullptr);
+
+    swapchainImages.resize(imageCount);
+
+    // Chamada 2: Endereço da lista (o .data() do vector) para preenchê-la
+    vkGetSwapchainImagesKHR(logicalDevice, swapchain, &imageCount, swapchainImages.data());
+
+    LOGI("%d imagens da Swapchain", imageCount);
+
+    // 2 - CRIANDO AS IMAGE VIEWS
+    // View para CADA imagem
+    swapchainImagesViews.resize(swapchainImages.size());
+
+    for (size_t i = 0; i < swapchainImages.size(); i++) {
+        VkImageViewCreateInfo viewInfo{};
+        viewInfo.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO;
+
+        viewInfo.image = swapchainImages[i];
+        // textura 2D normal
+        viewInfo.viewType = VK_IMAGE_VIEW_TYPE_2D;
+        viewInfo.format = swapchainImageFormat;
+
+        // nao misturar cores, deixar o padrão
+        viewInfo.components.r = VK_COMPONENT_SWIZZLE_IDENTITY;
+        viewInfo.components.g = VK_COMPONENT_SWIZZLE_IDENTITY;
+        viewInfo.components.b = VK_COMPONENT_SWIZZLE_IDENTITY;
+        viewInfo.components.a = VK_COMPONENT_SWIZZLE_IDENTITY;
+
+        // 'subresourceRange' descreve qual parte da imagem usaremos.
+        // imagem de cor, sem múltiplas camadas (sem 3D ou Mipmaps)
+        viewInfo.subresourceRange.aspectMask = VK_IMAGE_ASPECT_COLOR_BIT;
+        viewInfo.subresourceRange.baseMipLevel = 0;
+        viewInfo.subresourceRange.levelCount = 1;
+        viewInfo.subresourceRange.baseArrayLayer = 0;
+        viewInfo.subresourceRange.layerCount = 1;
+
+        if (vkCreateImageView(logicalDevice, &viewInfo, nullptr, &swapchainImagesViews[i]) !=
+            VK_SUCCESS) {
+            LOGI("Falha ao criar a Image View número %zu!", i);
+        }
+    }
+
+    LOGI("Image Views criadas com sucesso!");
+}
+
+// O Render Pass dita três regras fundamentais para este anexo:
+//
+//Load Op (Operação de Carregamento): O que fazer com o bloco de memória antes de desenhar? (Ex: Limpar com uma cor preta, ou manter o desenho do quadro anterior).
+//
+//Store Op (Operação de Armazenamento): O que fazer após finalizar o desenho? (Ex: Salvar o resultado final na memória RAM para que o Android possa exibi-lo).
+//
+//Layout Transitions (Transições de Layout): A memória das imagens da GPU muda de formato interno dependendo do que está sendo feito. A imagem deve transitar de "Indefinida" para "Otimizada para Desenho" e, finalmente, para "Pronta para Apresentação na Tela".
+void createRenderPass() {
+    // 1. DEFINIÇÃO DO ANEXO DE COR (A Tela)
+    VkAttachmentDescription colorAttachment{};
+    colorAttachment.format = swapchainImageFormat;
+
+    // Sem anti-aliasing
+    colorAttachment.samples = VK_SAMPLE_COUNT_1_BIT;
+
+    // Regras de início e fim para o Stencil (ignorado em desenhos básicos 2D)
+    colorAttachment.loadOp = VK_ATTACHMENT_LOAD_OP_CLEAR;   // Limpar a tela antes de desenhar
+    colorAttachment.storeOp = VK_ATTACHMENT_STORE_OP_STORE; // Salvar o resultado na RAM no final
+
+    // 2. REFERÊNCIA E SUBPASS
+    VkAttachmentReference colorAttachmentRef{};
+    colorAttachmentRef.attachment = 0; // Índice do anexo (0, pois só existe um)
+    colorAttachmentRef.layout = VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+
+    VkSubpassDescription subpass{};
+    subpass.pipelineBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS; // Indica que é uma operação gráfica, não computacional
+    subpass.colorAttachmentCount = 1;
+    subpass.pColorAttachments = &colorAttachmentRef;
+
+    // 3. CRIAÇÃO DO RENDER PASS
+    VkRenderPassCreateInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_CREATE_INFO;
+    renderPassInfo.attachmentCount = 1;
+    renderPassInfo.pAttachments = &colorAttachment;
+    renderPassInfo.subpassCount = 1;
+    renderPassInfo.pSubpasses = &subpass;
+
+    if (vkCreateRenderPass(logicalDevice, &renderPassInfo, nullptr, &renderPass) != VK_SUCCESS) {
+        LOGI("Falha ao criar o Render Pass!");
+    } else {
+        LOGI("Render Pass criado com sucesso!");
     }
 
 }
