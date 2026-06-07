@@ -16,9 +16,11 @@ VkSwapchainKHR swapchain;        // A Fila de telas
 VkSurfaceKHR surface;
 VkRenderPass renderPass;
 VkFormat swapchainImageFormat; // formato da nossa tela
+VkExtent2D swapchainExtent;
 
 std::vector<VkImage> swapchainImages; // imagens brutas
 std::vector<VkImageView> swapchainImagesViews;
+std::vector<VkFramebuffer> swapchainFrameBuffers;
 
 void createLogicalDevice() {
     VkDeviceQueueCreateInfo queueInfo{}; // {} <- iniciar sem sujeira
@@ -66,9 +68,8 @@ void createSwapChain(struct android_app *app) {
     int width = ANativeWindow_getWidth(app->window);
     int height = ANativeWindow_getHeight(app->window);
 
-    VkExtent2D imageExtend;
-    imageExtend.width = (uint32_t) width;
-    imageExtend.height = (uint32_t) height;
+    swapchainExtent.width = (uint32_t) width;
+    swapchainExtent.height = (uint32_t) height;
 
     // FORMULÁRIO DA SWAPCHAIN
     VkSwapchainCreateInfoKHR swapchainInfo{};
@@ -85,7 +86,7 @@ void createSwapChain(struct android_app *app) {
     swapchainInfo.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
 
     // O tamanho das imagens (a resolução do celular)
-    swapchainInfo.imageExtent = imageExtend;
+    swapchainInfo.imageExtent = swapchainExtent;
 
     // Sempre 1, a menos seja um app de Realidade Virtual
     swapchainInfo.imageArrayLayers = 1;
@@ -212,6 +213,34 @@ void createRenderPass() {
         LOGI("Render Pass criado com sucesso!");
     }
 
+}
+
+void createFrameBuffers() {
+    swapchainFrameBuffers.resize(swapchainImagesViews.size());
+
+    for (size_t i = 0; i < swapchainImagesViews.size(); i++) {
+        VkImageView attachments[] = {
+                swapchainImagesViews[i]
+        };
+
+        VkFramebufferCreateInfo framebufferInfo{};
+        framebufferInfo.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO;
+        framebufferInfo.renderPass = renderPass;
+        framebufferInfo.attachmentCount = 1;
+        framebufferInfo.pAttachments = attachments;
+
+        framebufferInfo.width = swapchainExtent.width;
+        framebufferInfo.height = swapchainExtent.height;
+
+        // Apenas 1 camada (imagens normais 2D)
+        framebufferInfo.layers = 1;
+
+        if (vkCreateFramebuffer(logicalDevice, &framebufferInfo, nullptr,
+                                &swapchainFrameBuffers[i]) != VK_SUCCESS) {
+            LOGI("Falha ao criar o Framebuffer %zu!", i);
+        }
+    }
+    LOGI("Framebuffers criados com sucesso!");
 }
 
 // Ponto de entrada
