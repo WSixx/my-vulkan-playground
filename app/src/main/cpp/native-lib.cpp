@@ -276,57 +276,70 @@ void createCommandPoolAndBuffer() {
     } else {
         LOGI("Command Buffer alocado com sucesso!");
     }
-
-
 }
 
 // Ponto de entrada
 void android_main(struct android_app *app) {
     LOGI("Aplicativo Vulkan Iniciado!");
 
-    // INICIALIZAÇÃO
-    // Aqui criaríamos a Instance, Physical Device, Logical Device e Swapchain.
-    // É nesta fase de inicialização que enviamos os dados estáticos para a GPU
-    // Fazemos isso apenas UMA VEZ antes de começar a desenhar.
+    // 1: INICIALIZAÇÃO DA LINHA DE MONTAGEM
 
+    createLogicalDevice();
+    createSwapChain(app);
+    createImageViews();
+    createRenderPass();
+    createFrameBuffers();
+    createCommandPoolAndBuffer();
+    LOGI("Toda a infraestrutura do Vulkan foi inicializada com sucesso!");
+
+    // 2: CARREGAMENTO DE DADOS ESTÁTICOS
+
+    // Definição das coordenadas e cores do triângulo
     float vertices[] = {
-            0.0f, -0.5f, 1.0f, 0.0f, 0.0f,
-            0.5f, 0.5f, 0.0f, 1.0f, 0.0f,
-            -0.5f, 0.5f, 0.0f, 0.0f, 1.0f
+            0.0f, -0.5f, 1.0f, 0.0f, 0.0f, // Topo (Vermelho)
+            0.5f, 0.5f, 0.0f, 1.0f, 0.0f, // Direita (Verde)
+            -0.5f, 0.5f, 0.0f, 0.0f, 1.0f  // Esquerda (Azul)
     };
 
+    // O mapeamento de memória transfere estes dados para a GPU apenas uma vez.
+    // Nota: A variável 'bufferMemory' deve ser alocada previamente (etapa do Vertex Buffer).
     /* void* data;
     vkMapMemory(logicalDevice, bufferMemory, 0, sizeof(vertices), 0, &data);
     memcpy(data, vertices, sizeof(vertices));
     vkUnmapMemory(logicalDevice, bufferMemory);
     */
-    LOGI("Memória mapeada e vértices enviados para a GPU.");
+    LOGI("Dados dos vértices enviados para a memória da GPU.");
 
-    // =========================================================
-    // FASE 2: O GAME LOOP
-    // =========================================================
+    // 3: GAME LOOP (CICLO PRINCIPAL)
     while (true) {
         int ident;
         int events;
         struct android_poll_source *source;
 
-        // 2.1 Verifica os eventos do sistema Android (A "caixa de correio")
-        // O timeout '0' significa que ele não vai travar o loop esperando.
+        // 3.1 Verificação de eventos do sistema operacional Android
+        // O timeout '0' impede o travamento do loop, permitindo a renderização contínua.
         while ((ident = ALooper_pollAll(0, nullptr, &events, (void **) &source)) >= 0) {
-            // Processa o evento (ex: mudou a orientação da tela, usuário tocou)
+
+            // Processamento do evento capturado (ex: toque na tela, redimensionamento)
             if (source != nullptr) {
                 source->process(app, source);
             }
-            // Se o sistema pediu para destruir a Activity, saímos do loop de forma limpa.
+
+            // Verificação se o sistema operacional solicitou o encerramento da aplicação
             if (app->destroyRequested != 0) {
-                LOGI("Encerrando o aplicativo...");
-                // TODO: limpar (destruir) os recursos do Vulkan antes de sair
+                LOGI("Encerrando o loop e liberando recursos...");
+
+                // TODO: Adicionar chamadas vkDestroy... para evitar vazamento de memória ao sair.
                 return;
             }
         }
-        // 2.2 RENDERIZAÇÃO
-        // Se o app não foi encerrado e a janela está visível, montamos os
-        // Command Buffers e pedimos para a GPU desenhar o quadro na tela.
+
+        // 3.2 RENDERIZAÇÃO DO QUADRO
+        // Esta área é executada imediatamente após o processamento dos eventos do Android.
+        // Se a janela estiver ativa e visível, a gravação do Command Buffer é acionada.
+        // recordCommandBuffer();
+        // submitCommandBuffer();
+        // presentFrame();
     }
 }
 
