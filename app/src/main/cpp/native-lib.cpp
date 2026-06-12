@@ -19,6 +19,8 @@ VkFormat swapchainImageFormat; // formato da nossa tela
 VkExtent2D swapchainExtent;
 VkCommandPool commandPool;     // gerenciador de memória dos comandos
 VkCommandBuffer commandBuffer; // buffer onde os comandos de desenho serão gravados
+VkPipelineLayout pipelineLayout; // Controla os parâmetros uniformes (matrizes, texturas) passados para os shaders
+VkPipeline graphicsPipeline;     // objeto que consolida todo o estado do pipeline gráfico
 
 std::vector<VkImage> swapchainImages; // imagens brutas
 std::vector<VkImageView> swapchainImagesViews;
@@ -278,6 +280,155 @@ void createCommandPoolAndBuffer() {
     }
 }
 
+// Função utilitária para encapsular o binário do Shader | ler o arquivo binário .spv
+VkShaderModule createShaderModule(const std::vector<char> &code) {
+    VkShaderModuleCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO;
+    createInfo.codeSize = code.size();
+
+    // Vulkan espera um ponteiro do tipo uint32_t para os dados binários
+    createInfo.pCode = reinterpret_cast<const uint32_t *>(code.data());
+
+    VkShaderModule shaderModule;
+    if (vkCreateShaderModule(logicalDevice, &createInfo, nullptr, &shaderModule) != VK_SUCCESS) {
+        LOGI("Falha ao criar o modulo de shader");
+        return VK_NULL_HANDLE;
+    }
+
+    return shaderModule;
+}
+
+void createGraphicsPipeline() {
+    // 3.1 Carregamento simulado dos binários SPIR-V (Vértice e Fragmento)
+    // Em um projeto real do Android NDK, utiliza-se a API 'AAssetManager' para ler estes arquivos.
+    std::vector<char> vertShaderCode = { /* bytes do arquivo shader.vert.spv */ };
+    std::vector<char> fragShaderCode = { /* bytes do arquivo shader.frag.spv */ };
+
+    VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
+    VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
+
+    // Configuração do estágio do Vertex Shader
+    VkPipelineShaderStageCreateInfo vertShaderStageInfo{};
+    vertShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    vertShaderStageInfo.stage = VK_SHADER_STAGE_VERTEX_BIT;
+    vertShaderStageInfo.module = vertShaderModule;
+    vertShaderStageInfo.pName = "main"; // O ponto de entrada dentro do shader
+
+    // Configuração do estágio do Fragment Shader
+    VkPipelineShaderStageCreateInfo fragShaderStageInfo{};
+    fragShaderStageInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO;
+    fragShaderStageInfo.stage = VK_SHADER_STAGE_FRAGMENT_BIT;
+    fragShaderStageInfo.module = fragShaderModule;
+    fragShaderStageInfo.pName = "main";
+
+    VkPipelineShaderStageCreateInfo shaderStages[] = {vertShaderStageInfo, fragShaderStageInfo};
+
+    // 3.2 ESTADOS FIXOS DO PIPELINE (FIXED FUNCTIONS)
+
+    // Vertex Input: Descreve o formato dos vértices (enviados via memcpy anteriormente)
+    VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
+    vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
+    vertexInputInfo.vertexBindingDescriptionCount = 0; // Configuração simples sem buffers dinâmicos por enquanto
+    vertexInputInfo.vertexAttributeDescriptionCount = 0;
+
+    // Input Assembly: Define a topologia (Triângulos isolados)
+    VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
+    inputAssembly.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO;
+    inputAssembly.topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST;
+    inputAssembly.primitiveRestartEnable = VK_FALSE;
+
+    // Viewport e Scissor: Delimitam a região geométrica de desenho baseada na extensão da tela
+    VkViewport viewport{};
+    viewport.x = 0.0f;
+    viewport.y = 0.0f;
+    viewport.width = (float) swapchainExtent.width;
+    viewport.height = (float) swapchainExtent.height;
+    viewport.minDepth = 0.0f;
+    viewport.maxDepth = 1.0f;
+
+    VkRect2D scissor{};
+    scissor.offset = {0, 0};
+    scissor.extent = swapchainExtent;
+
+    VkPipelineViewportStateCreateInfo viewportState{};
+    viewportState.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO;
+    viewportState.viewportCount = 1;
+    viewportState.pViewports = &viewport;
+    viewportState.scissorCount = 1;
+    viewportState.pScissors = &scissor;
+
+    // Rasterizer: Transforma a geometria em fragmentos/pixels e define o Culling (Descarte de faces)
+    VkPipelineRasterizationStateCreateInfo rasterizer{};
+    rasterizer.sType = VK_STRUCTURE_TYPE_PIPELINE_RASTERIZATION_STATE_CREATE_INFO;
+    rasterizer.depthClampEnable = VK_FALSE;
+    rasterizer.rasterizerDiscardEnable = VK_FALSE;
+    rasterizer.polygonMode = VK_POLYGON_MODE_FILL; // Preenchimento completo do triângulo
+    rasterizer.lineWidth = 1.0f;
+    rasterizer.cullMode = VK_CULL_MODE_BACK_BIT;   // Descarte de geometria traseira para performance
+    rasterizer.frontFace = VK_FRONT_FACE_CLOCKWISE;
+
+    // Multisampling: Configurações de Anti-Aliasing (Desativado para simplicidade)
+    VkPipelineMultisampleStateCreateInfo multisampling{};
+    multisampling.sType = VK_STRUCTURE_TYPE_PIPELINE_MULTISAMPLE_STATE_CREATE_INFO;
+    multisampling.sampleShadingEnable = VK_FALSE;
+    multisampling.rasterizationSamples = VK_SAMPLE_COUNT_1_BIT;
+
+    // Color Blending: Como misturar a nova cor com a cor que já existia no pixel (Modo Opaco)
+    VkPipelineColorBlendAttachmentState colorBlendAttachment{};
+    colorBlendAttachment.colorWriteMask =
+            VK_COLOR_COMPONENT_R_BIT |
+            VK_COLOR_COMPONENT_G_BIT |
+            VK_COLOR_COMPONENT_B_BIT |
+            VK_COLOR_COMPONENT_A_BIT;
+    colorBlendAttachment.blendEnable = VK_FALSE;
+
+    VkPipelineColorBlendStateCreateInfo colorBlending{};
+    colorBlending.sType = VK_STRUCTURE_TYPE_PIPELINE_COLOR_BLEND_STATE_CREATE_INFO;
+    colorBlending.logicOpEnable = VK_FALSE;
+    colorBlending.attachmentCount = 1;
+    colorBlending.pAttachments = &colorBlendAttachment;
+
+    // 3.3 CRIAÇÃO DO PIPELINE LAYOUT
+    VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
+    pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+
+    if (vkCreatePipelineLayout(logicalDevice, &pipelineLayoutInfo, nullptr, &pipelineLayout) !=
+        VK_SUCCESS) {
+        LOGI("Falha ao criar o Pipeline Layout!");
+        return;
+    }
+
+    // 3.4 CRIAÇÃO DO GRAPHICS PIPELINE CONSOLIDADO
+    VkGraphicsPipelineCreateInfo pipelineInfo{};
+    pipelineInfo.sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO;
+    pipelineInfo.stageCount = 2; // Vertex + Fragment
+    pipelineInfo.pStages = shaderStages;
+    pipelineInfo.pVertexInputState = &vertexInputInfo;
+    pipelineInfo.pInputAssemblyState = &inputAssembly;
+    pipelineInfo.pViewportState = &viewportState;
+    pipelineInfo.pRasterizationState = &rasterizer;
+    pipelineInfo.pMultisampleState = &multisampling;
+    pipelineInfo.pColorBlendState = &colorBlending;
+    pipelineInfo.layout = pipelineLayout;
+
+    // Vinculação obrigatória ao Render Pass criado em passos anteriores
+    pipelineInfo.renderPass = renderPass;
+    pipelineInfo.subpass = 0;
+
+    if (vkCreateGraphicsPipelines(logicalDevice, VK_NULL_HANDLE, 1, &pipelineInfo, nullptr,
+                                  &graphicsPipeline) != VK_SUCCESS) {
+        LOGI("Falha ao criar o Graphics Pipeline!");
+    } else {
+        LOGI("Graphics Pipeline criado com sucesso!");
+    }
+
+    // Após a criação do pipeline, os módulos de shader individuais podem ser liberados
+    vkDestroyShaderModule(logicalDevice, fragShaderModule, nullptr);
+    vkDestroyShaderModule(logicalDevice, vertShaderModule, nullptr);
+
+}
+
+
 // Ponto de entrada
 void android_main(struct android_app *app) {
     LOGI("Aplicativo Vulkan Iniciado!");
@@ -342,5 +493,3 @@ void android_main(struct android_app *app) {
         // presentFrame();
     }
 }
-
-
