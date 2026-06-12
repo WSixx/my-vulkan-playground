@@ -17,6 +17,8 @@ VkSurfaceKHR surface;
 VkRenderPass renderPass;
 VkFormat swapchainImageFormat; // formato da nossa tela
 VkExtent2D swapchainExtent;
+VkCommandPool commandPool;     // gerenciador de memória dos comandos
+VkCommandBuffer commandBuffer; // buffer onde os comandos de desenho serão gravados
 
 std::vector<VkImage> swapchainImages; // imagens brutas
 std::vector<VkImageView> swapchainImagesViews;
@@ -241,6 +243,41 @@ void createFrameBuffers() {
         }
     }
     LOGI("Framebuffers criados com sucesso!");
+}
+
+void createCommandPoolAndBuffer() {
+    // 1. CRIANDO O COMMAND POOL
+    VkCommandPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
+
+    // Indica que o buffer de comando será regravado a cada quadro
+    poolInfo.flags = VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
+
+    // O pool deve estar associado à mesma família de fila de gráficos definida no início
+    poolInfo.queueFamilyIndex = 0;
+
+    if (vkCreateCommandPool(logicalDevice, &poolInfo, nullptr, &commandPool) != VK_SUCCESS) {
+        LOGI("Falha ao criar o Command Pool!");
+        return;
+    }
+    LOGI("Command Pool criado com sucesso");
+
+    // 2. ALOCANDO O COMMAND BUFFER
+    VkCommandBufferAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_ALLOCATE_INFO;
+
+    allocInfo.commandPool = commandPool;
+    // PRIMARY significa que este buffer pode ser enviado diretamente para a fila da GPU
+    allocInfo.level = VK_COMMAND_BUFFER_LEVEL_PRIMARY;
+    allocInfo.commandBufferCount = 1;
+
+    if (vkAllocateCommandBuffers(logicalDevice, &allocInfo, &commandBuffer) != VK_SUCCESS) {
+        LOGI("Falha ao alocar o Command Buffer!");
+    } else {
+        LOGI("Command Buffer alocado com sucesso!");
+    }
+
+
 }
 
 // Ponto de entrada
