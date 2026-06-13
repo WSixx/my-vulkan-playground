@@ -20,7 +20,10 @@ VkExtent2D swapchainExtent;
 VkCommandPool commandPool;     // gerenciador de memória dos comandos
 VkCommandBuffer commandBuffer; // buffer onde os comandos de desenho serão gravados
 VkPipelineLayout pipelineLayout; // Controla os parâmetros uniformes (matrizes, texturas) passados para os shaders
-VkPipeline graphicsPipeline;     // objeto que consolida todo o estado do pipeline gráfico
+VkPipeline graphicsPipeline;     // objeto que consolida todo o estado do pipeline grafico
+VkSemaphore imageAvailableSemaphore; // Sinaliza que a Swapchain liberou uma imagem para desenho
+VkSemaphore renderFinishedSemaphore; // Sinaliza que a GPU terminou de desenhar o quadro
+VkFence inFlightFence;               // Controla se a GPU terminou todo o trabalho do quadro atual
 
 std::vector<VkImage> swapchainImages; // imagens brutas
 std::vector<VkImageView> swapchainImagesViews;
@@ -426,6 +429,27 @@ void createGraphicsPipeline() {
     vkDestroyShaderModule(logicalDevice, fragShaderModule, nullptr);
     vkDestroyShaderModule(logicalDevice, vertShaderModule, nullptr);
 
+}
+
+void createSyncObjects() {
+    VkSemaphoreCreateInfo semaphoreInfo{};
+    semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
+
+    VkFenceCreateInfo fenceInfo{};
+    fenceInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+
+    // ATENÇÃO ARQUITETURAL: A cerca deve ser criada com a flag SIGNALED.
+    // Caso contrário, na primeiríssima volta do Game Loop, a CPU travará para sempre
+    // esperando por um quadro anterior que nunca existiu.
+    fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+
+    if (vkCreateSemaphore(logicalDevice, &semaphoreInfo, nullptr, &imageAvailableSemaphore) != VK_SUCCESS ||
+        vkCreateSemaphore(logicalDevice, &semaphoreInfo, nullptr, &renderFinishedSemaphore) != VK_SUCCESS ||
+        vkCreateFence(logicalDevice, &fenceInfo, nullptr, &inFlightFence) != VK_SUCCESS) {
+        LOGI("Falha ao criar os objetos de sincronização!");
+    } else {
+        LOGI("Objetos de sincronização criados com sucesso!");
+    }
 }
 
 
