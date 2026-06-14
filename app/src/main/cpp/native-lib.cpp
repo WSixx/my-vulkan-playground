@@ -2,6 +2,7 @@
 #include <vulkan/vulkan_android.h>
 #include <game-activity/native_app_glue/android_native_app_glue.h> // A ponte entre o ciclo de vida do Android e o C++
 #include <android/log.h>             //  Logcat
+#include <android/asset_manager.h>
 #include <cstring>
 #include <jni.h>
 #include <vector>
@@ -31,6 +32,50 @@ std::vector<VkImage> swapchainImages; // imagens brutas
 std::vector<VkImageView> swapchainImagesViews;
 std::vector<VkFramebuffer> swapchainFrameBuffers;
 
+void createInstance() {
+    VkApplicationInfo appInfo{};
+    appInfo.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+    appInfo.pApplicationName = "My First Vulkan";
+    appInfo.applicationVersion = VK_MAKE_VERSION(1, 0, 0);
+    appInfo.pEngineName = "No Engine";
+    appInfo.engineVersion = VK_MAKE_VERSION(1, 0, 0);
+    appInfo.apiVersion = VK_API_VERSION_1_0;
+
+    VkInstanceCreateInfo createInfo{};
+    createInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+    createInfo.pApplicationInfo = &appInfo;
+
+    // Extensões obrigatórias no Android para mostrar imagens na tela
+    const char *extensions[] = {"VK_KHR_surface", "VK_KHR_android_surface"};
+    createInfo.enabledExtensionCount = 2;
+    createInfo.ppEnabledExtensionNames = extensions;
+
+    if (vkCreateInstance(&createInfo, nullptr, &instance) != VK_SUCCESS) {
+        LOGI("Falha ao criar a Vulkan Instance!");
+    } else {
+        LOGI("Vulkan Instance criada com sucesso!");
+    }
+}
+
+void pickPhysicalDevice() {
+    uint32_t deviceCount = 0;
+    // Descobre quantas placas de vídeo o device tem
+    vkEnumeratePhysicalDevices(instance, &deviceCount, nullptr);
+
+    if (deviceCount == 0) {
+        LOGI("Falha: Nenhuma GPU com suporte a Vulkan encontrada!");
+        return;
+    }
+
+    // Pega a lista de placas de vídeo
+    std::vector<VkPhysicalDevice> devices(deviceCount);
+    vkEnumeratePhysicalDevices(instance, &deviceCount, devices.data());
+
+    // primeira GPU da lista é a nossa placa de vídeo principal
+    physicalDevice = devices[0];
+    LOGI("Placa de vídeo física selecionada com sucesso!");
+}
+
 void createLogicalDevice() {
     VkDeviceQueueCreateInfo queueInfo{}; // {} <- iniciar sem sujeira
 
@@ -48,8 +93,11 @@ void createLogicalDevice() {
     deviceInfo.queueCreateInfoCount = 1;
     deviceInfo.pQueueCreateInfos = &queueInfo;
 
-    // Opcional Configs extras device por enquanto vazio
-    deviceInfo.enabledExtensionCount = 0;
+    // Lista de extensões obrigatórias para a GPU trabalhar com telas
+    const char *deviceExtensions[] = {"VK_KHR_swapchain"};
+    // Ativando a extensão no formulário do Dispositivo
+    deviceInfo.enabledExtensionCount = 1;
+    deviceInfo.ppEnabledExtensionNames = deviceExtensions;
     deviceInfo.enabledLayerCount = 0;
 
     if (vkCreateDevice(physicalDevice, &deviceInfo, nullptr, &logicalDevice) != VK_SUCCESS) {
@@ -62,83 +110,98 @@ void createLogicalDevice() {
     vkGetDeviceQueue(logicalDevice, 0, 0, &presentQueue);
 }
 
-// Ponte da GPU e a Tela device
 void createSwapChain(struct android_app *app) {
 
-    // CRIANDO A SUPERFÍCIE (A Ponte com a Janela do Android)
+    // 1. CRIANDO A SUPERFÍCIE (A Ponte com a Janela do Android)
     VkAndroidSurfaceCreateInfoKHR surfaceInfo{};
     surfaceInfo.sType = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
-    surfaceInfo.window = app->window; // aqui pegamos a janela do device
+    surfaceInfo.window = app->window;
 
-    // Criar a Surface
     if (vkCreateAndroidSurfaceKHR(instance, &surfaceInfo, nullptr, &surface) != VK_SUCCESS) {
         LOGI("Falha ao criar a Surface do Android!");
         return;
     }
 
-    // PREPARANDO AS INFORMAÇÕES DA TELA (Resolução)
-    int width = ANativeWindow_getWidth(app->window);
-    int height = ANativeWindow_getHeight(app->window);
+    // 2. PREPARANDO AS INFORMAÇÕES DA TELA (Resolução Exata)
+    VkSurfaceCapabilitiesKHR capabilities;
+    vkGetPhysicalDeviceSurfaceCapabilitiesKHR(physicalDevice, surface, &capabilities);
 
-    swapchainExtent.width = (uint32_t) width;
-    swapchainExtent.height = (uint32_t) height;
+    // Se a largura for o número máximo possível, a GPU deixa a gente escolher a resolução.
+    // Caso contrário, somos OBRIGADOS a usar a resolução exata que a GPU exige!
+    if (capabilities.currentExtent.width != 0xFFFFFFFF) {
+        swapchainExtent = capabilities.currentExtent;
+    } else {
+        swapchainExtent.width = (uint32_t) ANativeWindow_getWidth(app->window);
+        swapchainExtent.height = (uint32_t) ANativeWindow_getHeight(app->window);
+    }
 
-    // FORMULÁRIO DA SWAPCHAIN
+    // 3. BUSCA DINÂMICA DE FORMATOS DE COR
+    uint32_t formatCount = 0;
+    vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, nullptr);
+    std::vector<VkSurfaceFormatKHR> formats(formatCount);
+    vkGetPhysicalDeviceSurfaceFormatsKHR(physicalDevice, surface, &formatCount, formats.data());
+
+    // Se a GPU devolver "Indefinido" como primeira opção, escolhemos o padrão seguro de celulares.
+    if (formats[0].format == VK_FORMAT_UNDEFINED) {
+        swapchainImageFormat = VK_FORMAT_R8G8B8A8_UNORM;
+    } else {
+        swapchainImageFormat = formats[0].format;
+    }
+
+    // 4. FORMULÁRIO DA SWAPCHAIN
     VkSwapchainCreateInfoKHR swapchainInfo{};
     swapchainInfo.sType = VK_STRUCTURE_TYPE_SWAPCHAIN_CREATE_INFO_KHR;
-
-    // Conectar Swapchain à Surface
     swapchainInfo.surface = surface;
 
-    // Quantas imagens na fila? (2 = Double Buffering)
-    swapchainInfo.minImageCount = 2;
+    // Formato
+    swapchainInfo.imageFormat = swapchainImageFormat;
+    if (formats[0].format == VK_FORMAT_UNDEFINED) {
+        swapchainInfo.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
+    } else {
+        swapchainInfo.imageColorSpace = formats[0].colorSpace;
+    }
 
-    // Formato de cor (8 bits por canal: Azul, Verde, Vermelho, Alpha)
-    swapchainInfo.imageFormat = VK_FORMAT_B8G8R8A8_SRGB;
-    swapchainInfo.imageColorSpace = VK_COLOR_SPACE_SRGB_NONLINEAR_KHR;
-
-    // O tamanho das imagens (a resolução do celular)
+    // Resolução Rigorosa
     swapchainInfo.imageExtent = swapchainExtent;
-
-    // Sempre 1, a menos seja um app de Realidade Virtual
     swapchainInfo.imageArrayLayers = 1;
-
-    // Usar essas imagens para desenhar cores nelas
     swapchainInfo.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;
 
-    // Sem transformação (não queremos rotacionar a imagem
-    swapchainInfo.preTransform = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+    // Quantidade dinâmica de imagens (geralmente pede-se o mínimo + 1 por segurança)
+    uint32_t minImages = capabilities.minImageCount + 1;
+    if (capabilities.maxImageCount > 0 && minImages > capabilities.maxImageCount) {
+        minImages = capabilities.maxImageCount;
+    }
+    swapchainInfo.minImageCount = minImages;
 
-    // Ignorar a transparência da janela do Android
-    swapchainInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    // Rotação dinâmica
+    swapchainInfo.preTransform = capabilities.currentTransform;
 
-    // V-Sync -> Modo FIFO garante que a troca de imagens espere a tela piscar.
-    // Assim economizar bateria
-    // obriga a sua GPU a entrar em "modo de espera" se ela desenhar os quadros mais rápido do que a tela do celular consegue exibir
+    // Transparência dinâmica (evita falha em emuladores)
+    if (capabilities.supportedCompositeAlpha & VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR) {
+        swapchainInfo.compositeAlpha = VK_COMPOSITE_ALPHA_INHERIT_BIT_KHR;
+    } else {
+        swapchainInfo.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
+    }
+
     swapchainInfo.presentMode = VK_PRESENT_MODE_FIFO_KHR;
-
-    // Ignora o desenho de pixels que estejam escondidos atrás de menus do sistema
     swapchainInfo.clipped = VK_TRUE;
-
-    // Se recriando a tela (ex: girou o celular), passaríamos a antiga aqui
     swapchainInfo.oldSwapchain = VK_NULL_HANDLE;
 
-    // Device e o endereço do nosso formulário (&swapchainInfo)
+    // 5. CRIAÇÃO FINAL
     if (vkCreateSwapchainKHR(logicalDevice, &swapchainInfo, nullptr, &swapchain) != VK_SUCCESS) {
         LOGI("Falha ao criar a Swapchain!");
     } else {
-        LOGI("Swapchain criada com sucesso! Resolução: %d x %d", width, height);
+        LOGI("Swapchain criada com sucesso! Resolução: %d x %d", swapchainExtent.width,
+             swapchainExtent.height);
     }
-
 }
 
 void createImageViews() {
     // 1 RESGATANDO AS IMAGENS BRUTAS DA SWAPCHAIN
-    uint32_t imageCount;
+    uint32_t imageCount = 0;
 
     // Chamada 1: ultimo parâmetro vazio (nullptr) só para descobrir o 'imageCount'
     vkGetSwapchainImagesKHR(logicalDevice, swapchain, &imageCount, nullptr);
-
     swapchainImages.resize(imageCount);
 
     // Chamada 2: Endereço da lista (o .data() do vector) para preenchê-la
@@ -288,6 +351,25 @@ void createCommandPoolAndBuffer() {
     }
 }
 
+std::vector<char> readAssetFile(AAssetManager *assetManager, const char *filename) {
+    // Abre o arquivo no modo "streaming"
+    AAsset *file = AAssetManager_open(assetManager, filename, AASSET_MODE_BUFFER);
+    if (!file) {
+        LOGI("Falha ao abrir o arquivo: %s", filename);
+        return {};
+    }
+
+    size_t fileLenght = AAsset_getLength(file);
+
+    std::vector<char> fileContent(fileLenght);
+
+    AAsset_read(file, fileContent.data(), fileLenght);
+
+    AAsset_close(file);
+
+    return fileContent;
+}
+
 // Função utilitária para encapsular o binário do Shader | ler o arquivo binário .spv
 VkShaderModule createShaderModule(const std::vector<char> &code) {
     VkShaderModuleCreateInfo createInfo{};
@@ -306,11 +388,11 @@ VkShaderModule createShaderModule(const std::vector<char> &code) {
     return shaderModule;
 }
 
-void createGraphicsPipeline() {
+void createGraphicsPipeline(AAssetManager *assetManager) {
     // 3.1 Carregamento simulado dos binários SPIR-V (Vértice e Fragmento)
     // Em um projeto real do Android NDK, utiliza-se a API 'AAssetManager' para ler estes arquivos.
-    std::vector<char> vertShaderCode = { /* bytes do arquivo shader.vert.spv */ };
-    std::vector<char> fragShaderCode = { /* bytes do arquivo shader.frag.spv */ };
+    std::vector<char> vertShaderCode = readAssetFile(assetManager, "shaders/shader.vert.spv");
+    std::vector<char> fragShaderCode = readAssetFile(assetManager, "shaders/shader.frag.spv");
 
     VkShaderModule vertShaderModule = createShaderModule(vertShaderCode);
     VkShaderModule fragShaderModule = createShaderModule(fragShaderCode);
@@ -468,16 +550,21 @@ void createSyncObjects() {
 
 void drawFrame() {
     // 1: Aguardar o quadro anterior terminar
-    // -----------------------------------------------------------------
-
     // A CPU bloqueia aqui caso a GPU ainda esteja a processar o ciclo anterior
     vkWaitForFences(logicalDevice, 1, &inFlightFence, VK_TRUE, UINT64_MAX);
 
     // 2: Adquirir uma imagem da Swapchain
     uint32_t imageIndex;
     // Solicita o índice da próxima imagem disponível. Ativa o semáforo correspondente quando pronta.
-    vkAcquireNextImageKHR(logicalDevice, swapchain, UINT64_MAX, imageAvailableSemaphore,
-                          VK_NULL_HANDLE, &imageIndex);
+
+    VkResult result = vkAcquireNextImageKHR(logicalDevice, swapchain, UINT64_MAX,
+                                            imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
+
+    // Se a tela estiver se ajustando ou não estiver pronta, abortamos apenas este quadro
+    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+        LOGI("Tela ainda não pronta. Tentando novamente no próximo quadro...");
+        return;
+    }
 
     // Apenas após garantir a imagem, a cerca é reiniciada para fechar o acesso da CPU
     vkResetFences(logicalDevice, 1, &inFlightFence);
@@ -620,34 +707,30 @@ void android_main(struct android_app *app) {
     LOGI("Aplicativo Vulkan Iniciado!");
 
     // 1: INICIALIZAÇÃO DA LINHA DE MONTAGEM
-
+    createInstance();
+    pickPhysicalDevice();
     createLogicalDevice();
+
+    // Aguarda aqui até o Android avisar que a tela do celular está pronta
+    while (app->window == nullptr) {
+        int events;
+        struct android_poll_source *source;
+        if (ALooper_pollOnce(-1, nullptr, &events, (void **) &source) >= 0) {
+            if (source != nullptr) {
+                source->process(app, source);
+            }
+        }
+    }
+    LOGI("A janela do Android está pronta!");
+
     createSwapChain(app);
     createImageViews();
     createRenderPass();
     createFrameBuffers();
     createCommandPoolAndBuffer();
-    createGraphicsPipeline();
+    createGraphicsPipeline(app->activity->assetManager);
     createSyncObjects();
     LOGI("Toda a infraestrutura do Vulkan foi inicializada com sucesso!");
-
-    // 2: CARREGAMENTO DE DADOS ESTÁTICOS
-
-    // Definição das coordenadas e cores do triângulo
-    float vertices[] = {
-            0.0f, -0.5f, 1.0f, 0.0f, 0.0f, // Topo (Vermelho)
-            0.5f, 0.5f, 0.0f, 1.0f, 0.0f, // Direita (Verde)
-            -0.5f, 0.5f, 0.0f, 0.0f, 1.0f  // Esquerda (Azul)
-    };
-
-    // O mapeamento de memória transfere estes dados para a GPU apenas uma vez.
-    // Nota: A variável 'bufferMemory' deve ser alocada previamente (etapa do Vertex Buffer).
-    /* void* data;
-    vkMapMemory(logicalDevice, bufferMemory, 0, sizeof(vertices), 0, &data);
-    memcpy(data, vertices, sizeof(vertices));
-    vkUnmapMemory(logicalDevice, bufferMemory);
-    */
-    LOGI("Dados dos vértices enviados para a memória da GPU.");
 
     // 3: GAME LOOP (CICLO PRINCIPAL)
     while (true) {
