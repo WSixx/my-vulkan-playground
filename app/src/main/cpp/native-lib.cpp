@@ -24,6 +24,8 @@ VkPipeline graphicsPipeline;     // objeto que consolida todo o estado do pipeli
 VkSemaphore imageAvailableSemaphore; // Sinaliza que a Swapchain liberou uma imagem para desenho
 VkSemaphore renderFinishedSemaphore; // Sinaliza que a GPU terminou de desenhar o quadro
 VkFence inFlightFence;               // Controla se a GPU terminou todo o trabalho do quadro atual
+VkQueue graphicsQueue; // Fila para submissão dos comandos gráficos
+VkQueue presentQueue;  // Fila para apresentação da imagem no ecrã
 
 std::vector<VkImage> swapchainImages; // imagens brutas
 std::vector<VkImageView> swapchainImagesViews;
@@ -431,6 +433,13 @@ void createGraphicsPipeline() {
 
 }
 
+// Como o processador (CPU) e a placa de vídeo (GPU) operam de forma totalmente assíncrona,
+// a CPU pode enviar comandos muito mais rápido do que a GPU consegue processá-los.
+//Semaphores (Semáforos - VkSemaphore): Sincronizam operações dentro da GPU ou entre a GPU e a Swapchain.
+// A CPU não enxerga e não espera por semáforos; eles servem para criar uma ordem de dependência entre tarefas da própria placa de vídeo.
+//
+//Fences (Cercas - VkFence): Sincronizam a CPU com a GPU.
+// Permitem que a CPU pare a sua execução e espere até que a GPU termine uma tarefa específica e sinalize que o espaço de memória está livre.
 void createSyncObjects() {
     VkSemaphoreCreateInfo semaphoreInfo{};
     semaphoreInfo.sType = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
@@ -443,8 +452,10 @@ void createSyncObjects() {
     // esperando por um quadro anterior que nunca existiu.
     fenceInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
 
-    if (vkCreateSemaphore(logicalDevice, &semaphoreInfo, nullptr, &imageAvailableSemaphore) != VK_SUCCESS ||
-        vkCreateSemaphore(logicalDevice, &semaphoreInfo, nullptr, &renderFinishedSemaphore) != VK_SUCCESS ||
+    if (vkCreateSemaphore(logicalDevice, &semaphoreInfo, nullptr, &imageAvailableSemaphore) !=
+        VK_SUCCESS ||
+        vkCreateSemaphore(logicalDevice, &semaphoreInfo, nullptr, &renderFinishedSemaphore) !=
+        VK_SUCCESS ||
         vkCreateFence(logicalDevice, &fenceInfo, nullptr, &inFlightFence) != VK_SUCCESS) {
         LOGI("Falha ao criar os objetos de sincronização!");
     } else {
@@ -452,6 +463,109 @@ void createSyncObjects() {
     }
 }
 
+void drawFrame() {
+    // 1: Aguardar o quadro anterior terminar
+    // -----------------------------------------------------------------
+
+    // A CPU bloqueia aqui caso a GPU ainda esteja a processar o ciclo anterior
+    vkWaitForFences(logicalDevice, 1, &inFlightFence, VK_TRUE, UINT64_MAX);
+
+    // 2: Adquirir uma imagem da Swapchain
+    uint32_t imageIndex;
+    // Solicita o índice da próxima imagem disponível. Ativa o semáforo correspondente quando pronta.
+    vkAcquireNextImageKHR(logicalDevice, swapchain, UINT64_MAX, imageAvailableSemaphore,
+                          VK_NULL_HANDLE, &imageIndex);
+
+    // Apenas após garantir a imagem, a cerca é reiniciada para fechar o acesso da CPU
+    vkResetFences(logicalDevice, 1, &inFlightFence);
+
+    // 3: Gravação do Command Buffer
+
+    // Limpa os comandos anteriores do buffer antes de iniciar a nova gravação
+    vkResetCommandBuffer(commandBuffer, 0);
+
+    VkCommandBufferBeginInfo beginInfo{};
+    beginInfo.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
+
+    if (vkBeginCommandBuffer(commandBuffer, &beginInfo) != VK_SUCCESS) {
+        LOGI("Falha ao inciar a gravação do Command Buffer");
+        return;
+    }
+
+    // Configuração do início do Render Pass
+    VkRenderPassBeginInfo renderPassInfo{};
+    renderPassInfo.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO;
+    renderPassInfo.renderPass = renderPass;
+    // Vincula o Framebuffer específico da imagem adquirida neste frame
+    renderPassInfo.framebuffer = swapchainFrameBuffers[imageIndex];
+    renderPassInfo.renderArea.offset = {0, 0};
+    renderPassInfo.renderArea.extent = swapchainExtent;
+
+    // Define a cor de limpeza do ecrã (Preto opaco: R=0, G=0, B=0, A=1)
+    VkClearValue clearColor = {{{0.0f, 0.0f, 0.0f, 1.0f}}};
+    renderPassInfo.clearValueCount = 1;
+    renderPassInfo.pClearValues = &clearColor;
+
+    // --- Início das instruções para a GPU ---
+    vkCmdBeginRenderPass(commandBuffer, &renderPassInfo, VK_SUBPASS_CONTENTS_INLINE);
+
+    // Vincula o Pipeline Gráfico imutável (contendo os Shaders)
+    vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+
+    // Comando de desenho do triângulo
+    // Parâmetros: Buffer, quantidade de vértices (3), quantidade de instâncias (1), primeiro vértice (0), primeira instância (0)
+    vkCmdDraw(commandBuffer, 3, 1, 0, 0);
+
+    vkCmdEndRenderPass(commandBuffer);
+    // --- Fim das instruções ---
+
+    if (vkEndCommandBuffer(commandBuffer) != VK_SUCCESS) {
+        LOGI("Falha ao finalizar a gravação do Command Buffer!");
+        return;
+    }
+
+    // 4: Submissão para a Fila da GPU
+    VkSubmitInfo submitInfo{};
+    submitInfo.sType = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+
+    // Determina que o estágio de escrita de cores deve esperar até a imagem estar disponível
+    VkSemaphore waitSemaphores[]{imageAvailableSemaphore};
+    VkPipelineStageFlags waitStages[] = {VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT};
+    submitInfo.waitSemaphoreCount = 1;
+    submitInfo.pWaitSemaphores = waitSemaphores;
+    submitInfo.pWaitDstStageMask = waitStages;
+
+    // Vincula o Command Buffer gravado para envio
+    submitInfo.commandBufferCount = 1;
+    submitInfo.pCommandBuffers = &commandBuffer;
+
+    // Semáforo que será sinalizado assim que a GPU terminar a renderização
+    VkSemaphore signalSemaphores[] = {renderFinishedSemaphore};
+    submitInfo.signalSemaphoreCount = 1;
+    submitInfo.pSignalSemaphores = signalSemaphores;
+
+    // Envia o lote de comandos para a fila de gráficos, vinculando a cerca de controlo
+    if (vkQueueSubmit(graphicsQueue, 1, &submitInfo, inFlightFence) != VK_SUCCESS) {
+        LOGI("Falha ao submeter o Command Buffer para a fila!");
+        return;
+    }
+
+    // 5: Apresentação da Imagem no Ecrã
+    VkPresentInfoKHR presentInfo{};
+    presentInfo.sType = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
+
+    // Configura a apresentação para esperar o término da renderização (renderFinishedSemaphore)
+    presentInfo.waitSemaphoreCount = 1;
+    presentInfo.pWaitSemaphores = signalSemaphores;
+
+    VkSwapchainKHR swapchains[] = {swapchain};
+    presentInfo.swapchainCount = 1;
+    presentInfo.pSwapchains = swapchains;
+    presentInfo.pImageIndices = &imageIndex;
+
+    // Envia o resultado final para o sistema de exibição do Android
+    vkQueuePresentKHR(presentQueue, &presentInfo);
+}
 
 // Ponto de entrada
 void android_main(struct android_app *app) {
@@ -489,31 +603,23 @@ void android_main(struct android_app *app) {
     while (true) {
         int ident;
         int events;
+        struct android_app_glue_state* state;
         struct android_poll_source *source;
 
         // 3.1 Verificação de eventos do sistema operacional Android
         // O timeout '0' impede o travamento do loop, permitindo a renderização contínua.
         while ((ident = ALooper_pollAll(0, nullptr, &events, (void **) &source)) >= 0) {
-
-            // Processamento do evento capturado (ex: toque na tela, redimensionamento)
             if (source != nullptr) {
                 source->process(app, source);
             }
-
-            // Verificação se o sistema operacional solicitou o encerramento da aplicação
             if (app->destroyRequested != 0) {
-                LOGI("Encerrando o loop e liberando recursos...");
-
-                // TODO: Adicionar chamadas vkDestroy... para evitar vazamento de memória ao sair.
+                LOGI("Encerrando a aplicação...");
                 return;
             }
         }
 
         // 3.2 RENDERIZAÇÃO DO QUADRO
-        // Esta área é executada imediatamente após o processamento dos eventos do Android.
-        // Se a janela estiver ativa e visível, a gravação do Command Buffer é acionada.
-        // recordCommandBuffer();
-        // submitCommandBuffer();
-        // presentFrame();
+        // Executado continuamente em cada ciclo livre do processador
+        drawFrame();
     }
 }
