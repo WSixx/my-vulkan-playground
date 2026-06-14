@@ -10,7 +10,7 @@ material = "1.14.0"
 constraintlayout = "2.2.1"
 
 [libraries]
-androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version = "1.19.0" }
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version = "1.18.0" }
 androidx-games-activity = { module = "androidx.games:games-activity", version.ref = "gamesActivity" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 androidx-junit = { group = "androidx.test.ext", name = "junit", version.ref = "junitVersion" }

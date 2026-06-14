@@ -1,7 +1,3 @@
-# For more information about using CMake with Android Studio, read the
-# documentation: https://d.android.com/studio/projects/add-native-code.html.
-# For more examples on how to use CMake, see https://github.com/android/ndk-samples.
-
 # Sets the minimum CMake version required for this project.
 cmake_minimum_required(VERSION 4.1.2)
 
@@ -11,30 +7,50 @@ cmake_minimum_required(VERSION 4.1.2)
 # build script scope).
 project("myvulkanplayground")
 
-# Creates and names a library, sets it as either STATIC
-# or SHARED, and provides the relative paths to its source code.
-# You can define multiple libraries, and CMake builds them for you.
-# Gradle automatically packages shared libraries with your APK.
-#
-# In this top level CMakeLists.txt, ${CMAKE_PROJECT_NAME} is used to define
-# the target library name; in the sub-module's CMakeLists.txt, ${PROJECT_NAME}
-# is preferred for the same purpose.
-#
-find_package(game-activity REQUIRED CONFIG)
-# In order to load a library into your app from Java/Kotlin, you must call
-# System.loadLibrary() and pass the name of the library defined here;
-# for GameActivity/NativeActivity derived applications, the same library name must be
-# used in the AndroidManifest.xml file.
+find_package(Vulkan REQUIRED)
+# Encontra a biblioteca de Log do Android (para a nossa macro LOGI funcionar)
+find_library(log-lib log)
+# Encontra a GameActivity (A ponte moderna entre C++ e Kotlin)
+find_package(game-activity REQUIRED)
+
 add_library(${CMAKE_PROJECT_NAME} SHARED
         # List C/C++ source files with relative paths to this CMakeLists.txt.
         native-lib.cpp)
 
-# Specifies libraries CMake should link to your target library. You
-# can link libraries from various origins, such as libraries defined in this
-# build script, prebuilt third-party libraries, or Android system libraries.
 target_link_libraries(${CMAKE_PROJECT_NAME}
-        # List libraries link to the target library
-        vulkan  # A API do Vulkan
+        Vulkan::Vulkan  # A API do Vulkan
         android
         game-activity::game-activity_static
         log)
+
+# COMPILAÇÃO DOS SHADERS (GLSL -> SPIR-V)
+find_program(GLSLC glslc REQUIRED)
+
+set(SHADER_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR}/shaders)
+# Pede ao CMake para calcular o caminho ABSOLUTO e exato da pasta assets
+get_filename_component(ASSETS_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../assets" ABSOLUTE)
+set(SHADER_DST_DIR "${ASSETS_DIR}/shaders")
+
+file(MAKE_DIRECTORY ${SHADER_DST_DIR})
+
+add_custom_command(
+        OUTPUT ${SHADER_DST_DIR}/shader.vert.spv
+        COMMAND ${GLSLC} -c ${SHADER_SRC_DIR}/shader.vert -o ${SHADER_DST_DIR}/shader.vert.spv
+        DEPENDS ${SHADER_SRC_DIR}/shader.vert
+)
+
+# Comando para compilar o Fragment Shader
+add_custom_command(
+        OUTPUT ${SHADER_DST_DIR}/shader.frag.spv
+        COMMAND ${GLSLC} -c ${SHADER_SRC_DIR}/shader.frag -o ${SHADER_DST_DIR}/shader.frag.spv
+        DEPENDS ${SHADER_SRC_DIR}/shader.frag
+)
+
+# Cria um "pacote" com os dois shaders gerados
+add_custom_target(compile_shaders DEPENDS
+        ${SHADER_DST_DIR}/shader.vert.spv
+        ${SHADER_DST_DIR}/shader.frag.spv
+)
+
+# Avisa ao CMake: "Só compile a biblioteca C++ DEPOIS de compilar os shaders"
+add_dependencies(${CMAKE_PROJECT_NAME} compile_shaders)

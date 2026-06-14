@@ -658,7 +658,7 @@ void android_main(struct android_app *app) {
 
         // 3.1 Verificação de eventos do sistema operacional Android
         // O timeout '0' impede o travamento do loop, permitindo a renderização contínua.
-        while ((ident = ALooper_pollAll(0, nullptr, &events, (void **) &source)) >= 0) {
+        while ((ident = ALooper_pollOnce(0, nullptr, &events, (void **) &source)) >= 0) {
             if (source != nullptr) {
                 source->process(app, source);
             }

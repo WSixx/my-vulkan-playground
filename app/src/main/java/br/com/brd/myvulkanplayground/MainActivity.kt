@@ -1,32 +1,10 @@
 package br.com.brd.myvulkanplayground
 
-import androidx.appcompat.app.AppCompatActivity
-import android.os.Bundle
-import android.widget.TextView
-import br.com.brd.myvulkanplayground.databinding.ActivityMainBinding
+import com.google.androidgamesdk.GameActivity
 
-class MainActivity : AppCompatActivity() {
-
-    private lateinit var binding: ActivityMainBinding
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-
-        binding = ActivityMainBinding.inflate(layoutInflater)
-        setContentView(binding.root)
-
-        // Example of a call to a native method
-        binding.sampleText.text = stringFromJNI()
-    }
-
-    /**
-     * A native method that is implemented by the 'myvulkanplayground' native library,
-     * which is packaged with this application.
-     */
-    external fun stringFromJNI(): String
+class MainActivity : GameActivity() {
 
     companion object {
-        // Used to load the 'myvulkanplayground' library on application startup.
         init {
             System.loadLibrary("myvulkanplayground")
         }
