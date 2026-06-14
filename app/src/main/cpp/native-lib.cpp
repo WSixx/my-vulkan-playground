@@ -54,9 +54,12 @@ void createLogicalDevice() {
 
     if (vkCreateDevice(physicalDevice, &deviceInfo, nullptr, &logicalDevice) != VK_SUCCESS) {
         LOGI("Falha ao criar o Logical Device!");
-    } else {
-        LOGI("Logical Device criado com sucesso!");
+        return;
     }
+    LOGI("Logical Device criado com sucesso!");
+
+    vkGetDeviceQueue(logicalDevice, 0, 0, &graphicsQueue);
+    vkGetDeviceQueue(logicalDevice, 0, 0, &presentQueue);
 }
 
 // Ponte da GPU e a Tela device
@@ -567,6 +570,51 @@ void drawFrame() {
     vkQueuePresentKHR(presentQueue, &presentInfo);
 }
 
+void cleanup() {
+    if (logicalDevice != VK_NULL_HANDLE) {
+        // 1. Aguarda-se a GPU concluir qualquer operação pendente antes de iniciar a destruição
+        vkDeviceWaitIdle(logicalDevice);
+
+        // 2. Objetos de Sincronização (Filhos do Logical Device)
+        vkDestroySemaphore(logicalDevice, renderFinishedSemaphore, nullptr);
+        vkDestroySemaphore(logicalDevice, imageAvailableSemaphore, nullptr);
+        vkDestroyFence(logicalDevice, inFlightFence, nullptr);
+
+        // 3. Gerenciador de Comandos
+        // (A destruição do Pool libera automaticamente todos os Command Buffers alocados por ele)
+        vkDestroyCommandPool(logicalDevice, commandPool, nullptr);
+
+        // 4. Alvos de Renderização (Filhos do RenderPass e das ImageViews)
+        for (auto framebuffer: swapchainFrameBuffers) {
+            vkDestroyFramebuffer(logicalDevice, framebuffer, nullptr);
+        }
+
+        // 5. Pipeline Gráfico e suas configurações imutáveis
+        vkDestroyPipeline(logicalDevice, graphicsPipeline, nullptr);
+        vkDestroyPipelineLayout(logicalDevice, pipelineLayout, nullptr);
+        vkDestroyRenderPass(logicalDevice, renderPass, nullptr);
+
+        // 6. Lentes de Visualização das Imagens
+        for (auto imageView: swapchainImagesViews) {
+            vkDestroyImageView(logicalDevice, imageView, nullptr);
+        }
+
+        // 7. A Fila de Telas (Depende da Surface e do Device)
+        vkDestroySwapchainKHR(logicalDevice, swapchain, nullptr);
+
+        // 8. O Dispositivo Lógico (Deve ser destruído ANTES da Surface e da Instance)
+        vkDestroyDevice(logicalDevice, nullptr);
+    }
+
+    // 9. Componentes globais da conexão com o sistema operacional
+    if (instance != VK_NULL_HANDLE) {
+        vkDestroySurfaceKHR(instance, surface, nullptr);
+        vkDestroyInstance(instance, nullptr);
+    }
+
+    LOGI("Memória do Vulkan liberada");
+}
+
 // Ponto de entrada
 void android_main(struct android_app *app) {
     LOGI("Aplicativo Vulkan Iniciado!");
@@ -579,6 +627,8 @@ void android_main(struct android_app *app) {
     createRenderPass();
     createFrameBuffers();
     createCommandPoolAndBuffer();
+    createGraphicsPipeline();
+    createSyncObjects();
     LOGI("Toda a infraestrutura do Vulkan foi inicializada com sucesso!");
 
     // 2: CARREGAMENTO DE DADOS ESTÁTICOS
@@ -603,7 +653,7 @@ void android_main(struct android_app *app) {
     while (true) {
         int ident;
         int events;
-        struct android_app_glue_state* state;
+        struct android_app_glue_state *state;
         struct android_poll_source *source;
 
         // 3.1 Verificação de eventos do sistema operacional Android
@@ -614,6 +664,7 @@ void android_main(struct android_app *app) {
             }
             if (app->destroyRequested != 0) {
                 LOGI("Encerrando a aplicação...");
+                cleanup();
                 return;
             }
         }
