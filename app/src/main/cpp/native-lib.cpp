@@ -6,6 +6,7 @@
 #include <cstring>
 #include <jni.h>
 #include <vector>
+#include <cstddef>
 
 #define LOGI(...) ((void)__android_log_print(ANDROID_LOG_INFO, "VulkanApp", __VA_ARGS__)) // Helper Log
 
@@ -27,10 +28,24 @@ VkSemaphore renderFinishedSemaphore; // Sinaliza que a GPU terminou de desenhar 
 VkFence inFlightFence;               // Controla se a GPU terminou todo o trabalho do quadro atual
 VkQueue graphicsQueue; // Fila para submissão dos comandos gráficos
 VkQueue presentQueue;  // Fila para apresentação da imagem no ecrã
+VkBuffer vertexBuffer;
+VkDeviceMemory vertexBufferMemory;
 
 std::vector<VkImage> swapchainImages; // imagens brutas
 std::vector<VkImageView> swapchainImagesViews;
 std::vector<VkFramebuffer> swapchainFrameBuffers;
+
+struct Vertex {
+    float position[2]; // Guarda o X e o Y
+    float color[3];    // Guarda o R, G e B
+};
+
+const std::vector<Vertex> vertices = {
+        {{0.0f,  -0.5f}, {1.0f, 0.0f, 0.0f}}, // Vértice 1: Topo (Vermelho)
+        {{0.5f,  0.5f},  {0.0f, 1.0f, 0.0f}}, // Vértice 2: Direita (Verde)
+        {{-0.5f, 0.5f},  {0.0f, 0.0f, 1.0f}}  // Vértice 3: Esquerda (Azul)
+};
+
 
 void createInstance() {
     VkApplicationInfo appInfo{};
@@ -415,11 +430,34 @@ void createGraphicsPipeline(AAssetManager *assetManager) {
 
     // 3.2 ESTADOS FIXOS DO PIPELINE (FIXED FUNCTIONS)
 
+    // descrição geral do nosso "pacote" (Binding)
+    VkVertexInputBindingDescription bindingDescription{};
+    bindingDescription.binding = 0;
+    bindingDescription.stride = sizeof(Vertex);
+    bindingDescription.inputRate = VK_VERTEX_INPUT_RATE_VERTEX;
+
+    // descrição de cada item dentro do pacote (Attributes)
+    VkVertexInputAttributeDescription attributeDescriptions[2]{};
+
+    // Atributo 0: Posição (X e Y)
+    attributeDescriptions[0].binding = 0;
+    attributeDescriptions[0].location = 0; // O layout(location = 0) do Shader
+    attributeDescriptions[0].format = VK_FORMAT_R32G32_SFLOAT; // 2 Floats de 32 bits
+    attributeDescriptions[0].offset = offsetof(Vertex, position);
+
+    // Atributo 1: Cor (R, G e B)
+    attributeDescriptions[1].binding = 0;
+    attributeDescriptions[1].location = 1; // O layout(location = 1) do Shader
+    attributeDescriptions[1].format = VK_FORMAT_R32G32B32_SFLOAT; // 3 Floats de 32 bits
+    attributeDescriptions[1].offset = offsetof(Vertex, color);
+
     // Vertex Input: Descreve o formato dos vértices (enviados via memcpy anteriormente)
     VkPipelineVertexInputStateCreateInfo vertexInputInfo{};
     vertexInputInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO;
-    vertexInputInfo.vertexBindingDescriptionCount = 0; // Configuração simples sem buffers dinâmicos por enquanto
-    vertexInputInfo.vertexAttributeDescriptionCount = 0;
+    vertexInputInfo.vertexBindingDescriptionCount = 1;
+    vertexInputInfo.pVertexBindingDescriptions = &bindingDescription;
+    vertexInputInfo.vertexAttributeDescriptionCount = 2;
+    vertexInputInfo.pVertexAttributeDescriptions = attributeDescriptions;
 
     // Input Assembly: Define a topologia (Triângulos isolados)
     VkPipelineInputAssemblyStateCreateInfo inputAssembly{};
@@ -518,6 +556,65 @@ void createGraphicsPipeline(AAssetManager *assetManager) {
 
 }
 
+// Encontrar o typo exato da memoria do device
+uint32_t findMemoryType(uint32_t typeFilter, VkMemoryPropertyFlags properties) {
+    VkPhysicalDeviceMemoryProperties memoryProperties;
+    vkGetPhysicalDeviceMemoryProperties(physicalDevice, &memoryProperties);
+
+    for (uint32_t i = 0; i < memoryProperties.memoryTypeCount; i++) {
+        if ((typeFilter * (1 << i)) &&
+            (memoryProperties.memoryTypes[i].propertyFlags & properties) == properties) {
+            return i;
+        }
+    }
+    return 0;
+}
+
+void createVertexBuffer() {
+    // Tamanho total em bytes = (Tamanho de 1 Vértice) * (Quantidade de Vértices)
+    VkDeviceSize bufferSize = sizeof(vertices[0]) * vertices.size();
+
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = bufferSize;
+    bufferInfo.usage = VK_BUFFER_USAGE_VERTEX_BUFFER_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateBuffer(logicalDevice, &bufferInfo, nullptr, &vertexBuffer) != VK_SUCCESS) {
+        LOGI("Falha ao criar o molde do Vertex Buffer");
+        return;
+    }
+
+    // requisitos de memória à GPU
+    VkMemoryRequirements memRequirements{};
+    vkGetBufferMemoryRequirements(logicalDevice, vertexBuffer, &memRequirements);
+
+    // Aloca a memória física VRAM visível para o CPU
+    VkMemoryAllocateInfo allocateInfo{};
+    allocateInfo.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
+    allocateInfo.allocationSize = memRequirements.size;
+    allocateInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits,
+                                                  VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT |
+                                                  VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+
+    if (vkAllocateMemory(logicalDevice, &allocateInfo, nullptr, &vertexBufferMemory) !=
+        VK_SUCCESS) {
+        LOGI("Falha ao alocar memoria fisica para o Vertex Buffer!");
+        return;
+    }
+
+    // memória física com o molde do buffer
+    vkBindBufferMemory(logicalDevice, vertexBuffer, vertexBufferMemory, 0);
+    LOGI("Vertex Buffer criado e memoria alocada com sucesso");
+
+    // Transferir os dados do C++ para a GPU
+    void *data; // Um ponteiro vazio para guardar o endereço da GPU
+    vkMapMemory(logicalDevice, vertexBufferMemory, 0, bufferSize, 0, &data); // Abre a porta
+    memcpy(data, vertices.data(), (size_t) bufferSize); // Faz a transferência
+    vkUnmapMemory(logicalDevice, vertexBufferMemory); // Fecha a porta
+}
+
+
 // Como o processador (CPU) e a placa de vídeo (GPU) operam de forma totalmente assíncrona,
 // a CPU pode enviar comandos muito mais rápido do que a GPU consegue processá-los.
 //Semaphores (Semáforos - VkSemaphore): Sincronizam operações dentro da GPU ou entre a GPU e a Swapchain.
@@ -601,6 +698,10 @@ void drawFrame() {
 
     // Vincula o Pipeline Gráfico imutável (contendo os Shaders)
     vkCmdBindPipeline(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS, graphicsPipeline);
+
+    VkBuffer vertexBuffers[] = {vertexBuffer};
+    VkDeviceSize offsets[] = {0};
+    vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
 
     // Comando de desenho do triângulo
     // Parâmetros: Buffer, quantidade de vértices (3), quantidade de instâncias (1), primeiro vértice (0), primeira instância (0)
@@ -729,6 +830,7 @@ void android_main(struct android_app *app) {
     createFrameBuffers();
     createCommandPoolAndBuffer();
     createGraphicsPipeline(app->activity->assetManager);
+    createVertexBuffer();
     createSyncObjects();
     LOGI("Toda a infraestrutura do Vulkan foi inicializada com sucesso!");
 
@@ -739,9 +841,10 @@ void android_main(struct android_app *app) {
         struct android_app_glue_state *state;
         struct android_poll_source *source;
 
-        // 3.1 Verificação de eventos do sistema operacional Android
-        // O timeout '0' impede o travamento do loop, permitindo a renderização contínua.
-        while ((ident = ALooper_pollOnce(0, nullptr, &events, (void **) &source)) >= 0) {
+        // Se a janela existir, timeout é 0 (rodar rápido). Se não existir, timeout é -1 (dormir).
+        int timeout = (app->window != nullptr) ? 0 : -1;
+
+        while ((ident = ALooper_pollOnce(timeout, nullptr, &events, (void **) &source)) >= 0) {
             if (source != nullptr) {
                 source->process(app, source);
             }
@@ -750,10 +853,13 @@ void android_main(struct android_app *app) {
                 cleanup();
                 return;
             }
+            // Atualiza o timeout caso o Android tenha destruído ou criado a janela neste exato milissegundo
+            timeout = (app->window != nullptr) ? 0 : -1;
         }
 
-        // 3.2 RENDERIZAÇÃO DO QUADRO
-        // Executado continuamente em cada ciclo livre do processador
-        drawFrame();
+        // Só tenta gravar comandos e desenhar se o ecrã do telemóvel estiver ativado e disponível
+        if (app->window != nullptr) {
+            drawFrame();
+        }
     }
 }
