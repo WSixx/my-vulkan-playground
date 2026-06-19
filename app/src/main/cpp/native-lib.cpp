@@ -46,6 +46,7 @@ const std::vector<Vertex> vertices = {
         {{-0.5f, 0.5f},  {0.0f, 0.0f, 1.0f}}  // Vértice 3: Esquerda (Azul)
 };
 
+void recreateSwapChain(struct android_app *app);
 
 void createInstance() {
     VkApplicationInfo appInfo{};
@@ -645,7 +646,7 @@ void createSyncObjects() {
     }
 }
 
-void drawFrame() {
+void drawFrame(struct android_app *app) {
     // 1: Aguardar o quadro anterior terminar
     // A CPU bloqueia aqui caso a GPU ainda esteja a processar o ciclo anterior
     vkWaitForFences(logicalDevice, 1, &inFlightFence, VK_TRUE, UINT64_MAX);
@@ -653,13 +654,16 @@ void drawFrame() {
     // 2: Adquirir uma imagem da Swapchain
     uint32_t imageIndex;
     // Solicita o índice da próxima imagem disponível. Ativa o semáforo correspondente quando pronta.
-
     VkResult result = vkAcquireNextImageKHR(logicalDevice, swapchain, UINT64_MAX,
                                             imageAvailableSemaphore, VK_NULL_HANDLE, &imageIndex);
 
     // Se a tela estiver se ajustando ou não estiver pronta, abortamos apenas este quadro
-    if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
-        LOGI("Tela ainda não pronta. Tentando novamente no próximo quadro...");
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_ERROR_SURFACE_LOST_KHR) {
+        LOGI("Janela mudou ou foi minimizada. Recriando a Swapchain...");
+        recreateSwapChain(app);
+        return;
+    } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
+        LOGI("Falha ao adquirir a imagem! Código do erro Vulkan: %d", result);
         return;
     }
 
@@ -755,7 +759,40 @@ void drawFrame() {
     presentInfo.pImageIndices = &imageIndex;
 
     // Envia o resultado final para o sistema de exibição do Android
-    vkQueuePresentKHR(presentQueue, &presentInfo);
+    result = vkQueuePresentKHR(presentQueue, &presentInfo);
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR ||
+        result == VK_ERROR_SURFACE_LOST_KHR) {
+        LOGI("A tela mudou durante a apresentação. Recriando...");
+        recreateSwapChain(app);
+    }
+}
+
+void cleanupSwapChain() {
+    // Destruímos na ordem INVERSA da criação
+    for (auto framebuffer: swapchainFrameBuffers) {
+        vkDestroyFramebuffer(logicalDevice, framebuffer, nullptr);
+    }
+    vkDestroyPipeline(logicalDevice, graphicsPipeline, nullptr);
+    vkDestroyPipelineLayout(logicalDevice, pipelineLayout, nullptr);
+    vkDestroyRenderPass(logicalDevice, renderPass, nullptr);
+    for (auto imageView: swapchainImagesViews) {
+        vkDestroyImageView(logicalDevice, imageView, nullptr);
+    }
+    vkDestroySwapchainKHR(logicalDevice, swapchain, nullptr);
+    vkDestroySurfaceKHR(instance, surface, nullptr);
+}
+
+void recreateSwapChain(struct android_app *app) {
+    // 1. Espera a placa de vídeo terminar qualquer desenho que esteja a fazer no momento
+    vkDeviceWaitIdle(logicalDevice);
+    cleanupSwapChain();
+
+    // Reconstroi:
+    createSwapChain(app);
+    createImageViews();
+    createRenderPass();
+    createGraphicsPipeline(app->activity->assetManager);
+    createFrameBuffers();
 }
 
 void cleanup() {
@@ -771,24 +808,6 @@ void cleanup() {
         // 3. Gerenciador de Comandos
         // (A destruição do Pool libera automaticamente todos os Command Buffers alocados por ele)
         vkDestroyCommandPool(logicalDevice, commandPool, nullptr);
-
-        // 4. Alvos de Renderização (Filhos do RenderPass e das ImageViews)
-        for (auto framebuffer: swapchainFrameBuffers) {
-            vkDestroyFramebuffer(logicalDevice, framebuffer, nullptr);
-        }
-
-        // 5. Pipeline Gráfico e suas configurações imutáveis
-        vkDestroyPipeline(logicalDevice, graphicsPipeline, nullptr);
-        vkDestroyPipelineLayout(logicalDevice, pipelineLayout, nullptr);
-        vkDestroyRenderPass(logicalDevice, renderPass, nullptr);
-
-        // 6. Lentes de Visualização das Imagens
-        for (auto imageView: swapchainImagesViews) {
-            vkDestroyImageView(logicalDevice, imageView, nullptr);
-        }
-
-        // 7. A Fila de Telas (Depende da Surface e do Device)
-        vkDestroySwapchainKHR(logicalDevice, swapchain, nullptr);
 
         // 8. O Dispositivo Lógico (Deve ser destruído ANTES da Surface e da Instance)
         vkDestroyDevice(logicalDevice, nullptr);
@@ -859,7 +878,7 @@ void android_main(struct android_app *app) {
 
         // Só tenta gravar comandos e desenhar se o ecrã do telemóvel estiver ativado e disponível
         if (app->window != nullptr) {
-            drawFrame();
+            drawFrame(app);
         }
     }
 }
