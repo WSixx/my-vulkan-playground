@@ -30,6 +30,10 @@ VkQueue graphicsQueue; // Fila para submissão dos comandos gráficos
 VkQueue presentQueue;  // Fila para apresentação da imagem no ecrã
 VkBuffer vertexBuffer;
 VkDeviceMemory vertexBufferMemory;
+VkDescriptorSetLayout descriptorSetLayout;
+VkBuffer uniformBuffer;
+VkDeviceMemory uniformBufferMemory;
+void *uniformBufferMapped;
 
 std::vector<VkImage> swapchainImages; // imagens brutas
 std::vector<VkImageView> swapchainImagesViews;
@@ -38,6 +42,10 @@ std::vector<VkFramebuffer> swapchainFrameBuffers;
 struct Vertex {
     float position[2]; // Guarda o X e o Y
     float color[3];    // Guarda o R, G e B
+};
+
+struct UniformBufferObject {
+    float angle;
 };
 
 const std::vector<Vertex> vertices = {
@@ -404,6 +412,28 @@ VkShaderModule createShaderModule(const std::vector<char> &code) {
     return shaderModule;
 }
 
+void createDescriptorSetLayout() {
+    VkDescriptorSetLayoutBinding uboLayoutBinding{};
+    uboLayoutBinding.binding = 0;
+    uboLayoutBinding.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    uboLayoutBinding.descriptorCount = 1;
+    uboLayoutBinding.stageFlags = VK_SHADER_STAGE_VERTEX_BIT;
+    uboLayoutBinding.pImmutableSamplers = nullptr;
+
+    // Preenche o formulário para criar o Layout
+    VkDescriptorSetLayoutCreateInfo layoutInfo{};
+    layoutInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO;
+    layoutInfo.bindingCount = 1;
+    layoutInfo.pBindings = &uboLayoutBinding;
+
+    if (vkCreateDescriptorSetLayout(logicalDevice, &layoutInfo, nullptr, &descriptorSetLayout) !=
+        VK_SUCCESS) {
+        LOGI("Flaha ao criar o Descriptor Set Layout");
+        return;
+    }
+    LOGI("Descriptor Set Layout criado com sucesso!");
+}
+
 void createGraphicsPipeline(AAssetManager *assetManager) {
     // 3.1 Carregamento simulado dos binários SPIR-V (Vértice e Fragmento)
     // Em um projeto real do Android NDK, utiliza-se a API 'AAssetManager' para ler estes arquivos.
@@ -520,6 +550,8 @@ void createGraphicsPipeline(AAssetManager *assetManager) {
     // 3.3 CRIAÇÃO DO PIPELINE LAYOUT
     VkPipelineLayoutCreateInfo pipelineLayoutInfo{};
     pipelineLayoutInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO;
+    pipelineLayoutInfo.setLayoutCount = 1;
+    pipelineLayoutInfo.pSetLayouts = &descriptorSetLayout;
 
     if (vkCreatePipelineLayout(logicalDevice, &pipelineLayoutInfo, nullptr, &pipelineLayout) !=
         VK_SUCCESS) {
@@ -615,6 +647,46 @@ void createVertexBuffer() {
     vkUnmapMemory(logicalDevice, vertexBufferMemory); // Fecha a porta
 }
 
+void createUniformBuffer() {
+    VkDeviceSize bufferSize = sizeof(UniformBufferObject);
+
+    // Criar o molde do uniform Buffer
+    VkBufferCreateInfo bufferInfo{};
+    bufferInfo.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+    bufferInfo.size = bufferSize;
+    bufferInfo.usage = VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT;
+    bufferInfo.sharingMode = VK_SHARING_MODE_EXCLUSIVE;
+
+    if (vkCreateBuffer(logicalDevice, &bufferInfo, nullptr, &uniformBuffer) != VK_SUCCESS) {
+        LOGI("Falha ao criar molde do Uniform Buffer");
+        return;
+    }
+
+    // Requisitos de memoria
+    VkMemoryRequirements memRequirements;
+    vkGetBufferMemoryRequirements(logicalDevice, uniformBuffer, &memRequirements);
+
+    // Alocar memoria fisica (HOST_VISIBLE e HOST_COHERENT)
+    VkMemoryAllocateInfo allocInfo{};
+    allocInfo.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+    allocInfo.allocationSize = memRequirements.size;
+    allocInfo.memoryTypeIndex = findMemoryType(memRequirements.memoryTypeBits,
+                                               VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT
+                                               | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+    if (vkAllocateMemory(logicalDevice, &allocInfo, nullptr, &uniformBufferMemory) != VK_SUCCESS) {
+        LOGI("Falha ao alocar memoria para o Uniform Buffer");
+        return;
+    }
+
+    // Vincular memoria ao buffer
+    vkBindBufferMemory(logicalDevice, uniformBuffer, uniformBufferMemory, 0);
+
+    // MAPEAMENTO PERSISTENTE (Deixar a porta aberta permanente)
+    // Ponteiro da variável global '&uniformBufferMapped' para reter o endereço
+    vkMapMemory(logicalDevice, uniformBufferMemory, 0, bufferSize, 0, &uniformBufferMapped);
+
+    LOGI("Uniform Buffer criado e mapeado de forma persistente");
+}
 
 // Como o processador (CPU) e a placa de vídeo (GPU) operam de forma totalmente assíncrona,
 // a CPU pode enviar comandos muito mais rápido do que a GPU consegue processá-los.
@@ -774,6 +846,7 @@ void cleanupSwapChain() {
     }
     vkDestroyPipeline(logicalDevice, graphicsPipeline, nullptr);
     vkDestroyPipelineLayout(logicalDevice, pipelineLayout, nullptr);
+    vkDestroyDescriptorSetLayout(logicalDevice, descriptorSetLayout, nullptr);
     vkDestroyRenderPass(logicalDevice, renderPass, nullptr);
     for (auto imageView: swapchainImagesViews) {
         vkDestroyImageView(logicalDevice, imageView, nullptr);
@@ -848,8 +921,10 @@ void android_main(struct android_app *app) {
     createRenderPass();
     createFrameBuffers();
     createCommandPoolAndBuffer();
+    createDescriptorSetLayout();
     createGraphicsPipeline(app->activity->assetManager);
     createVertexBuffer();
+    createUniformBuffer();
     createSyncObjects();
     LOGI("Toda a infraestrutura do Vulkan foi inicializada com sucesso!");
 
