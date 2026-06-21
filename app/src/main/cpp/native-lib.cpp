@@ -31,6 +31,8 @@ VkQueue presentQueue;  // Fila para apresentação da imagem no ecrã
 VkBuffer vertexBuffer;
 VkDeviceMemory vertexBufferMemory;
 VkDescriptorSetLayout descriptorSetLayout;
+VkDescriptorPool descriptorPool;
+VkDescriptorSet descriptorSet;
 VkBuffer uniformBuffer;
 VkDeviceMemory uniformBufferMemory;
 void *uniformBufferMapped;
@@ -688,6 +690,56 @@ void createUniformBuffer() {
     LOGI("Uniform Buffer criado e mapeado de forma persistente");
 }
 
+void createDescriptorPool() {
+    VkDescriptorPoolSize poolSize{};
+    poolSize.type = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    poolSize.descriptorCount = 1;
+
+    VkDescriptorPoolCreateInfo poolInfo{};
+    poolInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO;
+    poolInfo.poolSizeCount = 1;
+    poolInfo.pPoolSizes = &poolSize;
+    poolInfo.maxSets = 1;
+
+    if (vkCreateDescriptorPool(logicalDevice, &poolInfo, nullptr, &descriptorPool) != VK_SUCCESS) {
+        LOGI("Falha ao criar o Descriptor Pool");
+        return;
+    }
+    LOGI("Descriptor Pool criado com sucesso");
+}
+
+void createDescriptorSets() {
+    VkDescriptorSetAllocateInfo allocateInfo{};
+    allocateInfo.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+    allocateInfo.descriptorPool = descriptorPool;
+    allocateInfo.descriptorSetCount = 1;
+    allocateInfo.pSetLayouts = &descriptorSetLayout;
+
+    if (vkAllocateDescriptorSets(logicalDevice, &allocateInfo, &descriptorSet) != VK_SUCCESS) {
+        LOGI("Falha ao alocar o Descriptor Set");
+        return;
+    }
+
+    // Avisar qual é o Buffer físico que vai ser plugado
+    VkDescriptorBufferInfo bufferInfo{};
+    bufferInfo.buffer = uniformBuffer;
+    bufferInfo.offset = 0;
+    bufferInfo.range = sizeof(UniformBufferObject);
+
+    // Ligação (update)
+    VkWriteDescriptorSet descriptorWrite{};
+    descriptorWrite.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+    descriptorWrite.dstSet = descriptorSet;
+    descriptorWrite.dstBinding = 0; // porta 0
+    descriptorWrite.dstArrayElement = 0;
+    descriptorWrite.descriptorType = VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER;
+    descriptorWrite.descriptorCount = 1;
+    descriptorWrite.pBufferInfo = &bufferInfo;
+
+    vkUpdateDescriptorSets(logicalDevice, 1, &descriptorWrite, 0, nullptr);
+    LOGI("Descriptor Set Alocado e plugado com sucesso");
+}
+
 // Como o processador (CPU) e a placa de vídeo (GPU) operam de forma totalmente assíncrona,
 // a CPU pode enviar comandos muito mais rápido do que a GPU consegue processá-los.
 //Semaphores (Semáforos - VkSemaphore): Sincronizam operações dentro da GPU ou entre a GPU e a Swapchain.
@@ -719,6 +771,15 @@ void createSyncObjects() {
 }
 
 void drawFrame(struct android_app *app) {
+
+    static float timeAngle = 0.0f;
+    timeAngle += 0.02f; // aumenta o ângulo a cada frame
+
+    UniformBufferObject ubo{};
+    ubo.angle = timeAngle;
+
+    memcpy(uniformBufferMapped, &ubo, sizeof(ubo));
+
     // 1: Aguardar o quadro anterior terminar
     // A CPU bloqueia aqui caso a GPU ainda esteja a processar o ciclo anterior
     vkWaitForFences(logicalDevice, 1, &inFlightFence, VK_TRUE, UINT64_MAX);
@@ -731,11 +792,11 @@ void drawFrame(struct android_app *app) {
 
     // Se a tela estiver se ajustando ou não estiver pronta, abortamos apenas este quadro
     if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_ERROR_SURFACE_LOST_KHR) {
-        LOGI("Janela mudou ou foi minimizada. Recriando a Swapchain...");
+        LOGI("Janela mudou ou foi perdida. Recriando a Swapchain...");
         recreateSwapChain(app);
         return;
     } else if (result != VK_SUCCESS && result != VK_SUBOPTIMAL_KHR) {
-        LOGI("Falha ao adquirir a imagem! Código do erro Vulkan: %d", result);
+        LOGI("Falha ao adquirir a imagem! Código: %d", result);
         return;
     }
 
@@ -779,6 +840,11 @@ void drawFrame(struct android_app *app) {
     VkDeviceSize offsets[] = {0};
     vkCmdBindVertexBuffers(commandBuffer, 0, 1, vertexBuffers, offsets);
 
+    vkCmdBindDescriptorSets(commandBuffer, VK_PIPELINE_BIND_POINT_GRAPHICS,
+                            pipelineLayout,
+                            0, 1,
+                            &descriptorSet, 0,
+                            nullptr);
     // Comando de desenho do triângulo
     // Parâmetros: Buffer, quantidade de vértices (3), quantidade de instâncias (1), primeiro vértice (0), primeira instância (0)
     vkCmdDraw(commandBuffer, 3, 1, 0, 0);
@@ -832,8 +898,8 @@ void drawFrame(struct android_app *app) {
 
     // Envia o resultado final para o sistema de exibição do Android
     result = vkQueuePresentKHR(presentQueue, &presentInfo);
-    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_SUBOPTIMAL_KHR ||
-        result == VK_ERROR_SURFACE_LOST_KHR) {
+    if (result == VK_ERROR_OUT_OF_DATE_KHR || result == VK_ERROR_SURFACE_LOST_KHR ||
+        result == VK_SUBOPTIMAL_KHR) {
         LOGI("A tela mudou durante a apresentação. Recriando...");
         recreateSwapChain(app);
     }
@@ -852,6 +918,7 @@ void cleanupSwapChain() {
         vkDestroyImageView(logicalDevice, imageView, nullptr);
     }
     vkDestroySwapchainKHR(logicalDevice, swapchain, nullptr);
+    vkDestroyDescriptorPool(logicalDevice, descriptorPool, nullptr);
     vkDestroySurfaceKHR(instance, surface, nullptr);
 }
 
@@ -925,6 +992,8 @@ void android_main(struct android_app *app) {
     createGraphicsPipeline(app->activity->assetManager);
     createVertexBuffer();
     createUniformBuffer();
+    createDescriptorPool();
+    createDescriptorSets();
     createSyncObjects();
     LOGI("Toda a infraestrutura do Vulkan foi inicializada com sucesso!");
 
